@@ -46,6 +46,13 @@
   		<version>4.8.2</version>
   	</dependency>
   	
+  	<dependency>
+		<groupId>com.mnxfst.testing</groupId>
+  		<artifactId>ptest-consumer</artifactId>
+  		<version>0.0.1</version>
+  		<scope>provided</scope>  	
+  	</dependency>
+  	
   	<!-- jboss netty -->
   	<dependency>
   		<groupId>io.netty</groupId>

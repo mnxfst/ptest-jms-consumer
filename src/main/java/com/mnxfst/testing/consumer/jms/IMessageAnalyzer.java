@@ -16,31 +16,36 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
+package com.mnxfst.testing.consumer.jms;
 
-package com.mnxfst.testing.jms.exception;
+import java.util.Properties;
+
+import javax.jms.Message;
+
+import com.mnxfst.testing.consumer.exception.HttpRequestProcessingException;
 
 /**
- * Thrown during startup if the configuration misses a required information or contains invalid values
+ * Provides an analyzer for selected messages received from a JMS destination
  * @author mnxfst
- * @since 20.02.2012
+ * @since 22.02.2012
  */
-public class JMSConsumerConfigException extends Exception {
+public interface IMessageAnalyzer extends Runnable {
 
-	private static final long serialVersionUID = -5235875023810027586L;
-
-	public JMSConsumerConfigException() {		
-	}
+	/**
+	 * Initializes the analyzer
+	 * @param configuration
+	 */
+	public void initialize(Properties configuration) throws HttpRequestProcessingException;
 	
-	public JMSConsumerConfigException(String msg) {
-		super(msg);
-	}
+	/**
+	 * Processes the incoming message
+	 * @param message
+	 */
+	public void onMessage(Message message);
 	
-	public JMSConsumerConfigException(Throwable cause) {
-		super(cause);
-	}
+	/**
+	 * Shutsdown the message analyzer
+	 */
+	public void shutdown();
 	
-	public JMSConsumerConfigException(String msg, Throwable cause) {
-		super(msg, cause);
-	}	
-
 }

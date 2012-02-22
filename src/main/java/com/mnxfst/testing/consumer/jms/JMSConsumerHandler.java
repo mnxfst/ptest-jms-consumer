@@ -17,14 +17,20 @@
  *
  */
 
-package com.mnxfst.testing.jms.consumer;
+package com.mnxfst.testing.consumer.jms;
 
 import java.net.InetAddress;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import javax.jms.Connection;
 import javax.jms.ConnectionFactory;
@@ -61,6 +67,9 @@ public class JMSConsumerHandler implements IHttpRequestHandler, MessageListener 
 	private static final String REQUEST_PARAMETER_SECURITY_CREDENTIALS = "secCredentials";
 	
 	private static final String REQUEST_PARAMETER_VENDOR_SPECIFC_PREFIX = "vendor-";
+	private static final String REQUEST_PARAMETER_JMS_MESSAGE_ANALYZERS = "jmsMsgAnalyzers";
+	
+	private static final String CONFIG_PROPS_JMS_MESSAGE_ANALYZERS_PREFIX = "consumer.jms.message-analyzer.";
 	
 	private String id = null;
 	private String type = null;
@@ -72,13 +81,50 @@ public class JMSConsumerHandler implements IHttpRequestHandler, MessageListener 
 	private MessageConsumer messageConsumer = null;
 	
 	private int messagesReceived = 0;
+	private boolean running = false; 
+	
+	
+	private static ExecutorService jmsMessageAnalyzerExecService = Executors.newCachedThreadPool();
+	private static ConcurrentMap<String, IMessageAnalyzer> runningAnalyzers = new ConcurrentHashMap<String, IMessageAnalyzer>();
 
+	private Set<String> activatedAnalyzers = new HashSet<String>(); // TODO maybe we could get the other ones to sleep
+	
 	/**
 	 * @see com.mnxfst.testing.consumer.handler.IHttpRequestHandler#initialize(java.util.Properties, java.util.Map)
 	 */
 	public void initialize(Properties configuration, Map<String, List<String>> queryParameters) throws HttpRequestProcessingException {
 
-		// the JMS consumer receives configuration options just from the query parameters
+		synchronized (runningAnalyzers) {
+			if(runningAnalyzers.isEmpty()) {
+				for(Object propKey : configuration.keySet()) {
+					Object propVal = configuration.get(propKey);
+					
+					String k = (String)propKey;
+					String v = (String)propVal;
+					
+					// TODO implement anything like a pool of analyzers receiving the messages distributed via round-robin 
+					
+					if(k.startsWith(CONFIG_PROPS_JMS_MESSAGE_ANALYZERS_PREFIX)) {
+						
+						IMessageAnalyzer analyzer = null;
+						try {
+							@SuppressWarnings("unchecked")
+							Class<IMessageAnalyzer> analyzerClass = (Class<IMessageAnalyzer>)Class.forName(v);
+							analyzer = analyzerClass.newInstance();
+							analyzer.initialize(configuration);
+							runningAnalyzers.putIfAbsent(k.substring(CONFIG_PROPS_JMS_MESSAGE_ANALYZERS_PREFIX.length()), analyzer);
+							jmsMessageAnalyzerExecService.execute(analyzer);
+						} catch(ClassNotFoundException e) {
+							throw new HttpRequestProcessingException("Referenced analyzer class " + v + " not found");
+						} catch (InstantiationException e) {
+							throw new HttpRequestProcessingException("Failed to instantiate referenced analyzer class " + v );					
+						} catch (IllegalAccessException e) {
+							throw new HttpRequestProcessingException("Failed to access referenced analyzer class " + v );					
+						}
+					}
+				}
+			}
+		}
 		
 		Hashtable<String, String> jndiEnvironment =  new Hashtable<String, String>();
 		
@@ -100,6 +146,13 @@ public class JMSConsumerHandler implements IHttpRequestHandler, MessageListener 
 		
 		String securityPrincipal = extractSingleString(REQUEST_PARAMETER_SECURITY_PRINCIPAL, queryParameters);
 		String securityCredentials = extractSingleString(REQUEST_PARAMETER_SECURITY_CREDENTIALS, queryParameters);
+		
+		String[] jmsMsgAnalyzers = extractMultiParameterValues(REQUEST_PARAMETER_JMS_MESSAGE_ANALYZERS, queryParameters);
+		if(jmsMsgAnalyzers != null && jmsMsgAnalyzers.length > 0) {
+			for(int i = 0; i < jmsMsgAnalyzers.length; i++) {
+				activatedAnalyzers.add(jmsMsgAnalyzers[i]);
+			}
+		}
 		
 		jndiEnvironment.put(Context.INITIAL_CONTEXT_FACTORY, initialContextFactoryClass);
 		jndiEnvironment.put(Context.PROVIDER_URL, providerUrl);
@@ -138,7 +191,9 @@ public class JMSConsumerHandler implements IHttpRequestHandler, MessageListener 
 			throw new HttpRequestProcessingException("Failed to initialize naming context, lookup required objects and establish a connection. Error: " + e.getMessage());
 		}
 
-		logger.info("jmsConsumer[id="+this.id+", type="+this.type+", providerUrl="+providerUrl+", jmsDestination="+destination+", initialCtxFactory="+initialContextFactoryClass+", connectionFactoryName="+connectionFactoryName+"]");
+		
+		
+		logger.info("jmsConsumer[id="+this.id+", type="+this.type+", providerUrl="+providerUrl+", jmsDestination="+destination+", initialCtxFactory="+initialContextFactoryClass+", connectionFactoryName="+connectionFactoryName+", analyzers="+runningAnalyzers.size()+"]");
 		
 	}
 
@@ -147,8 +202,13 @@ public class JMSConsumerHandler implements IHttpRequestHandler, MessageListener 
 	 * @see javax.jms.MessageListener#onMessage(javax.jms.Message)
 	 */
 	public void onMessage(Message msg) {
-		System.out.println(msg);
+				
 		messagesReceived = messagesReceived + 1;
+		
+		for(String aa : activatedAnalyzers) {
+			IMessageAnalyzer analyzer = runningAnalyzers.get(aa);
+			analyzer.onMessage(msg);
+		}
 		
 		if(messagesReceived % 100 == 0) {
 			logger.info("Received " + messagesReceived+ " messages");
@@ -157,22 +217,27 @@ public class JMSConsumerHandler implements IHttpRequestHandler, MessageListener 
 			
 	}
 
-
+	
 	public void run() {
-
+		running = true;
+		while(running);
+		logger.info(JMSConsumerHandler.class.getName() + " shutdown");
 	}
 
 	/**
 	 * @see com.mnxfst.testing.consumer.handler.IHttpRequestHandler#shutdown()
 	 */
 	public void shutdown() throws HttpRequestProcessingException {
+		running = false;
 		try {
 			connection.stop();
 			session.close();
 		} catch (JMSException e) {
 			throw new HttpRequestProcessingException("Failed to shutdown " + JMSConsumerHandler.class.getName() + " (id="+id+") properly. Error: " + e.getMessage());
-		}
+		} 
 		
+		if(logger.isDebugEnabled())
+			logger.debug("Successfully shut down " + JMSConsumerHandler.class.getName());
 	}
 
 	public HttpRequestHandlerStatistics getHandlerStatistics() {
@@ -187,6 +252,28 @@ public class JMSConsumerHandler implements IHttpRequestHandler, MessageListener 
 	protected String extractSingleString(String parameter, Map<String, List<String>> queryParams) {		
 		List<String> values = queryParams.get(parameter);
 		return (values != null && !values.isEmpty()) ? values.get(0) : null;		
+	}
+
+	/**
+	 * Returns an array of strings containing the values received for the referenced parameter 
+	 * @param parameter
+	 * @param queryParams
+	 * @return
+	 * @throws HttpRequestProcessingException thrown in case there are no values 
+	 */
+	protected String[] extractMultiParameterValues(String parameter, Map<String, List<String>> queryParams) {
+		
+		List<String> values = queryParams.get(parameter);
+		if(values != null && !values.isEmpty()) {
+			String[] result = new String[values.size()];
+			for(int i = 0; i < values.size(); i++) {
+				String v = values.get(i);				
+				result[i] = (v != null ? v.trim() : "");
+			}
+			return result;
+		}
+		
+		return null;
 	}
 
 	/**

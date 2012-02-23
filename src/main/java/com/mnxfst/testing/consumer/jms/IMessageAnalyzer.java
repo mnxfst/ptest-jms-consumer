@@ -18,11 +18,12 @@
  */
 package com.mnxfst.testing.consumer.jms;
 
-import java.util.Properties;
+import java.util.List;
+import java.util.Map;
 
 import javax.jms.Message;
 
-import com.mnxfst.testing.consumer.exception.HttpRequestProcessingException;
+import com.mnxfst.testing.consumer.exception.AsyncInputConsumerException;
 
 /**
  * Provides an analyzer for selected messages received from a JMS destination
@@ -35,7 +36,7 @@ public interface IMessageAnalyzer extends Runnable {
 	 * Initializes the analyzer
 	 * @param configuration
 	 */
-	public void initialize(Properties configuration) throws HttpRequestProcessingException;
+	public void initialize(Map<String, List<String>> configuration) throws AsyncInputConsumerException;
 	
 	/**
 	 * Processes the incoming message

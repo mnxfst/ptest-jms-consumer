@@ -19,7 +19,8 @@
 package com.mnxfst.testing.consumer.jms.analyzer;
 
 import java.io.IOException;
-import java.util.Properties;
+import java.util.List;
+import java.util.Map;
 
 import javax.jms.JMSException;
 import javax.jms.Message;
@@ -40,7 +41,7 @@ import org.xml.sax.SAXException;
 
 import com.ibm.icu.text.SimpleDateFormat;
 import com.ibm.icu.util.TimeZone;
-import com.mnxfst.testing.consumer.exception.HttpRequestProcessingException;
+import com.mnxfst.testing.consumer.exception.AsyncInputConsumerException;
 import com.mnxfst.testing.consumer.jms.IMessageAnalyzer;
 
 /**
@@ -72,19 +73,19 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer {
 	private boolean running = false;
 	
 	/**
-	 * @see com.mnxfst.testing.consumer.jms.IMessageAnalyzer#initialize(java.util.Properties)
+	 * @see com.mnxfst.testing.consumer.jms.IMessageAnalyzer#initialize(java.util.Map)
 	 */
-	public void initialize(Properties configuration) throws HttpRequestProcessingException {
+	public void initialize(Map<String, List<String>> configuration) throws AsyncInputConsumerException {
 		
-		this.nodeId = configuration.getProperty(CFG_PROP_NODE_ID);
+		this.nodeId = extractSingleString(CFG_PROP_NODE_ID, configuration);
 		if(this.nodeId == null || this.nodeId.isEmpty())
-			throw new HttpRequestProcessingException("Missing required configuration option 'nodeId'");
-		this.measuringPointId = configuration.getProperty(CFG_PROP_MEASURING_POINT_ID);
+			throw new AsyncInputConsumerException("Missing required configuration option 'nodeId'");
+		this.measuringPointId = extractSingleString(CFG_PROP_MEASURING_POINT_ID, configuration);
 		if(this.measuringPointId == null || this.measuringPointId.isEmpty())
-			throw new HttpRequestProcessingException("Missing required configuration option 'measuringPointId'");
-		this.requiredDomainSign = configuration.getProperty(CFG_PROP_REQUIRED_DOMAIN_SIGN);
+			throw new AsyncInputConsumerException("Missing required configuration option 'measuringPointId'");
+		this.requiredDomainSign = extractSingleString(CFG_PROP_REQUIRED_DOMAIN_SIGN, configuration);
 		if(this.requiredDomainSign == null || this.requiredDomainSign.isEmpty())
-			throw new HttpRequestProcessingException("Missing required configuration option 'requiredDomainSign'");
+			throw new AsyncInputConsumerException("Missing required configuration option 'requiredDomainSign'");
 		
 		
 		// switch to utc
@@ -99,12 +100,22 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer {
 			this.materialGroupExpression = xpath.compile("//materialGroup/text()");
 			this.documentBuilder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
 		} catch (XPathExpressionException e) {
-			throw new HttpRequestProcessingException("Failed to compute xpath expressions required for JMS message content analysis");
+			throw new AsyncInputConsumerException("Failed to compute xpath expressions required for JMS message content analysis");
 		} catch (ParserConfigurationException e) {
-			throw new HttpRequestProcessingException("Failed to set up document builder required for JMS message content analysis");
-		}		
-		
+			throw new AsyncInputConsumerException("Failed to set up document builder required for JMS message content analysis");
+		}
 	}
+	
+	/**
+	 * Extracts a single value for the parameter referenced
+	 * @param values
+	 * @return
+	 */
+	protected String extractSingleString(String parameter, Map<String, List<String>> queryParams) {		
+		List<String> values = queryParams.get(parameter);
+		return (values != null && !values.isEmpty()) ? values.get(0) : null;		
+	}
+
 
 	public void onMessage(Message message) {
 		if(message != null) {

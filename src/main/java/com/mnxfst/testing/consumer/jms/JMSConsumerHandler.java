@@ -213,18 +213,10 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 			IMessageAnalyzer analyzer = runningAnalyzers.get(aa);
 			analyzer.onMessage(msg);
 		}
-		
-		if(messagesReceived % 100 == 0) {
-			logger.info("Received " + messagesReceived+ " messages");
-			System.out.println("Received " + messagesReceived+ " messages");
-		}
 			
 	}
 	
 	public void run() {
-		running = true;
-		while(running);
-		logger.info(JMSConsumerHandler.class.getName() + " shutdown");
 	}
 
 	/**

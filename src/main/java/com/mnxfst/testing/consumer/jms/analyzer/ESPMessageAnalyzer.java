@@ -18,7 +18,6 @@
  */
 package com.mnxfst.testing.consumer.jms.analyzer;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
@@ -29,15 +28,11 @@ import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
 import javax.xml.xpath.XPath;
-import javax.xml.xpath.XPathConstants;
 import javax.xml.xpath.XPathExpression;
 import javax.xml.xpath.XPathExpressionException;
 import javax.xml.xpath.XPathFactory;
 
-import org.apache.activemq.util.ByteArrayInputStream;
 import org.apache.log4j.Logger;
-import org.w3c.dom.Document;
-import org.xml.sax.SAXException;
 
 import com.ibm.icu.text.SimpleDateFormat;
 import com.ibm.icu.util.TimeZone;
@@ -121,9 +116,29 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer {
 		if(message != null) {
 			if(message instanceof TextMessage) {
 				try {
+
 					long incomingTime = System.currentTimeMillis();
 					String msg = ((TextMessage)message).getText();
+
 					if(msg != null && !msg.isEmpty()) {						
+						
+						int reqIdStartIdx = msg.indexOf("<pub:Id>");
+						int reqIdEndIdx = msg.indexOf("</pub:Id>");					
+						String requestId = msg.substring(reqIdStartIdx, reqIdEndIdx);
+						
+						int domainIdStartIdx = msg.indexOf("<pub:domainSign>");
+						int domainidEndIdx = msg.indexOf("</pub:domainSign>");
+						String domainSign = msg.substring(domainIdStartIdx, domainidEndIdx);
+						
+						int titleIdxStart = msg.indexOf("<pub:title>");
+						int titleIdxEnd = msg.indexOf("</pub:title>");
+						String title = msg.substring(titleIdxStart, titleIdxEnd);
+						
+						int matIdxStart = msg.indexOf("<pub:materialGroup>");
+						int matIdxEnd = msg.indexOf("</pub:materialGroup>");
+						String materialGroup = msg.substring(matIdxStart, matIdxEnd);
+					
+/*					
 						Document document = this.documentBuilder.parse(new ByteArrayInputStream(msg.getBytes()));
 						String requestId = null;
 						try {
@@ -151,7 +166,7 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer {
 							materialGroup = (String)materialGroupExpression.evaluate(document, XPathConstants.STRING);
 						} catch(XPathExpressionException e) {
 							//
-						}
+						}*/
 						
 						boolean validMessage = (requestId != null && !requestId.isEmpty()); 
 						if(validMessage)
@@ -162,15 +177,15 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer {
 							validMessage = (materialGroup != null && !materialGroup.isEmpty());
 						
 						StringBuffer logBuffer = new StringBuffer();
-						logBuffer.append(requestId).append(";").append(nodeId).append(";").append(measuringPointId).append(";").append(incomingTime).append(";").append(dateFormatter.format(incomingTime)).append(";").append(validMessage).append(";true"); // TODO validate request
+						logBuffer.append(requestId).append(";").append(nodeId).append(";").append(measuringPointId).append(";").append(incomingTime).append(";").append(dateFormatter.format(incomingTime)).append(";").append("true;").append(validMessage); // TODO validate request
 						logger.info(logBuffer.toString());
 					}
 				} catch (JMSException e) {
 					logger.error("Failed to convert incoming message to text message representation. Error: " + e.getMessage());
-				} catch (SAXException e) {
-					logger.error("Failed to parse incoming message into XML DOM representation. Error: " + e.getMessage());
-				} catch (IOException e) {
-					logger.error("Failed to execute a necessary I/O operation. Error: " + e.getMessage());
+//				} catch (SAXException e) {
+//					logger.error("Failed to parse incoming message into XML DOM representation. Error: " + e.getMessage());
+//				} catch (IOException e) {
+//					logger.error("Failed to execute a necessary I/O operation. Error: " + e.getMessage());
 				}
 			} 
 		}
@@ -182,11 +197,21 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer {
 	public void run() {
 		running = true;
 		while(running);
-		logger.error(ESPMessageAnalyzer.class.getName() + " shutdown");		
 	}
 	
 	public void shutdown() {
 		running = false;
 	}
 
+	public static void main(String[] args) {
+		long s = 1330079725078L;
+		long e = 1330079725734L;
+		System.out.println("2000 / " + (e-s) + ": " + (2000/ (e-s)));
+		
+		s = 1330081889940L;
+		e = 1330082036279L;
+		
+		System.out.println("113677 / " + (e-s) + ": " + (double)(113677/ (e-s)));
+	}
+	
 }

@@ -39,15 +39,24 @@ import javax.jms.Message;
 import javax.jms.MessageConsumer;
 import javax.jms.MessageListener;
 import javax.jms.Session;
+import javax.jms.TextMessage;
 import javax.naming.Context;
 import javax.naming.InitialContext;
 import javax.naming.NamingException;
 
 import org.apache.log4j.Logger;
 
+import com.lmax.disruptor.BatchEventProcessor;
+import com.lmax.disruptor.RingBuffer;
+import com.lmax.disruptor.SequenceBarrier;
+import com.lmax.disruptor.SingleThreadedClaimStrategy;
+import com.lmax.disruptor.SleepingWaitStrategy;
+import com.lmax.disruptor.dsl.Disruptor;
 import com.mnxfst.testing.consumer.async.AsyncInputConsumerStatistics;
 import com.mnxfst.testing.consumer.async.IAsyncInputConsumer;
 import com.mnxfst.testing.consumer.exception.AsyncInputConsumerException;
+import com.mnxfst.testing.consumer.jms.analyzer.ESPMessageAnalyzer;
+import com.mnxfst.testing.consumer.jms.event.JMSMessageEvent;
 
 /**
  * Implements a simple JMS destination consumer 
@@ -83,52 +92,22 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 	private boolean running = false; 
 	
 	
-	private static ExecutorService jmsMessageAnalyzerExecService = Executors.newCachedThreadPool();
-	private static ConcurrentMap<String, IMessageAnalyzer> runningAnalyzers = new ConcurrentHashMap<String, IMessageAnalyzer>();
+//	private static ExecutorService jmsMessageAnalyzerExecService = Executors.newCachedThreadPool();
+//	private static ConcurrentMap<String, IMessageAnalyzer> runningAnalyzers = new ConcurrentHashMap<String, IMessageAnalyzer>();
 
 	private Set<String> activatedAnalyzers = new HashSet<String>(); // TODO maybe we could get the other ones to sleep
 
-	public AsyncInputConsumerStatistics getConsumerStatistics() {
-		return new AsyncInputConsumerStatistics();
-	}
+	private RingBuffer<JMSMessageEvent> jmsMessageEventRingBuffer = null;
+	private final ExecutorService EXECUTOR = Executors.newFixedThreadPool(4);
+	private static final int BUFFER_SIZE = 1024 * 8;
+	
+
+	
 
 	/**
 	 * @see com.mnxfst.testing.consumer.async.IAsyncInputConsumer#initialize(java.util.Map)
 	 */
 	public void initialize(Map<String, List<String>> properties) throws AsyncInputConsumerException {
-
-		synchronized (runningAnalyzers) {
-			if(runningAnalyzers.isEmpty()) {
-				for(String propKey : properties.keySet()) {
-					List<String> values = properties.get(propKey);
-					
-					String k = (String)propKey;
-					
-					// TODO implement anything like a pool of analyzers receiving the messages distributed via round-robin 
-					
-					if(k.startsWith(CONFIG_PROPS_JMS_MESSAGE_ANALYZERS_PREFIX)) {
-						String v = (values != null ? values.get(0) : null);
-						
-						IMessageAnalyzer analyzer = null;
-						try {
-							@SuppressWarnings("unchecked")
-							Class<IMessageAnalyzer> analyzerClass = (Class<IMessageAnalyzer>)Class.forName(v);
-							analyzer = analyzerClass.newInstance();
-							analyzer.initialize(properties);
-							runningAnalyzers.putIfAbsent(k.substring(CONFIG_PROPS_JMS_MESSAGE_ANALYZERS_PREFIX.length()), analyzer);
-							jmsMessageAnalyzerExecService.execute(analyzer);
-						} catch(ClassNotFoundException e) {
-							throw new AsyncInputConsumerException("Referenced analyzer class " + v + " not found");
-						} catch (InstantiationException e) {
-							throw new AsyncInputConsumerException("Failed to instantiate referenced analyzer class " + v );					
-						} catch (IllegalAccessException e) {
-							throw new AsyncInputConsumerException("Failed to access referenced analyzer class " + v );					
-						}
-					}
-				}
-			}
-		}
-		
 		Hashtable<String, String> jndiEnvironment =  new Hashtable<String, String>();
 		
 		String initialContextFactoryClass = extractSingleString(REQUEST_PARAMETER_INITIAL_CONTEXT_FACTORY, properties);
@@ -149,14 +128,7 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 		
 		String securityPrincipal = extractSingleString(REQUEST_PARAMETER_SECURITY_PRINCIPAL, properties);
 		String securityCredentials = extractSingleString(REQUEST_PARAMETER_SECURITY_CREDENTIALS, properties);
-		
-		String[] jmsMsgAnalyzers = extractMultiParameterValues(REQUEST_PARAMETER_JMS_MESSAGE_ANALYZERS, properties);
-		if(jmsMsgAnalyzers != null && jmsMsgAnalyzers.length > 0) {
-			for(int i = 0; i < jmsMsgAnalyzers.length; i++) {
-				activatedAnalyzers.add(jmsMsgAnalyzers[i]);
-			}
-		}
-		
+
 		jndiEnvironment.put(Context.INITIAL_CONTEXT_FACTORY, initialContextFactoryClass);
 		jndiEnvironment.put(Context.PROVIDER_URL, providerUrl);
 		if(securityCredentials != null && !securityCredentials.isEmpty())
@@ -188,11 +160,14 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 			messageConsumer = session.createConsumer(destination);
 			messageConsumer.setMessageListener(this);
 			
+			
+			
 			// start listening
 			connection.start();
 
 			if(logger.isDebugEnabled())
-				logger.debug("jmsConsumer[id="+this.id+", type="+this.type+", providerUrl="+providerUrl+", jmsDestination="+destination+", initialCtxFactory="+initialContextFactoryClass+", connectionFactoryName="+connectionFactoryName+", clientId="+connection.getClientID()+", analyzers="+runningAnalyzers.size()+"]");
+				logger.debug("jmsConsumer[id="+this.id+", type="+this.type+", providerUrl="+providerUrl+", jmsDestination="+destination+", initialCtxFactory="+initialContextFactoryClass+", connectionFactoryName="+connectionFactoryName+", clientId="+connection.getClientID()+"]");//, analyzers="+runningAnalyzers.size()+"]");
+			logger.info("jmsConsumer[id="+this.id+", type="+this.type+", providerUrl="+providerUrl+", jmsDestination="+destination+", initialCtxFactory="+initialContextFactoryClass+", connectionFactoryName="+connectionFactoryName+", clientId="+connection.getClientID()+"]");//, analyzers="+runningAnalyzers.size()+"]");
 
 		} catch(NamingException e) {
 			logger.error("Failed to initialize naming context, lookup required objects and establish a connection. Error: " + e.getMessage(), e);
@@ -202,26 +177,48 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 			throw new AsyncInputConsumerException("Failed to initialize naming context, lookup required objects and establish a connection. Error: " + e.getMessage());
 		}
 		
-		
+		jmsMessageEventRingBuffer = new RingBuffer<JMSMessageEvent>(JMSMessageEvent.EVENT_FACTORY, new SingleThreadedClaimStrategy(BUFFER_SIZE), new SleepingWaitStrategy());
+		SequenceBarrier barrier = jmsMessageEventRingBuffer.newBarrier();
+		BatchEventProcessor<JMSMessageEvent> eventProcessor = new BatchEventProcessor<JMSMessageEvent>(jmsMessageEventRingBuffer, barrier, new ESPMessageAnalyzer());
+		jmsMessageEventRingBuffer.setGatingSequences(eventProcessor.getSequence());
+		EXECUTOR.submit(eventProcessor);
+		/*
+		RingBuffer<>disruptor = new Disruptor<JMSMessageEvent>(JMSMessageEvent.EVENT_FACTORY, EXECUTOR, new SingleThreadedClaimStrategy(BUFFER_SIZE), new SleepingWaitStrategy());
+		disruptor.handleEventsWith(new ESPMessageAnalyzer());
+		jmsMessageEventRingBuffer = disruptor.getRingBuffer();*/
+	}
+
+	public AsyncInputConsumerStatistics getConsumerStatistics() {
+		return new AsyncInputConsumerStatistics();
+	}
+	
+
+	/**
+	 * @see java.lang.Runnable#run()
+	 */
+	public void run() {
 	}
 
 
 	/**
 	 * @see javax.jms.MessageListener#onMessage(javax.jms.Message)
 	 */
-	public void onMessage(Message msg) {
-				
-		messagesReceived = messagesReceived + 1;
+	public void onMessage(Message message) {
 		
-		for(String aa : activatedAnalyzers) {
-			IMessageAnalyzer analyzer = runningAnalyzers.get(aa);
-			analyzer.onMessage(msg);
+		try {
+			if(message != null && message instanceof TextMessage) {
+				long sequence = jmsMessageEventRingBuffer.next();
+				JMSMessageEvent event = jmsMessageEventRingBuffer.get(sequence);
+				event.setMessageText(((TextMessage)message).getText());
+				event.setTimestamp(System.currentTimeMillis());
+				jmsMessageEventRingBuffer.publish(sequence);
+			}
+		} catch(JMSException e) {
+			logger.error("Failed to process JMS text message: " + e.getMessage());
 		}
-			
+		
 	}
-	
-	public void run() {
-	}
+
 
 	/**
 	 * @see com.mnxfst.testing.consumer.async.IAsyncInputConsumer#shutdown()
@@ -238,6 +235,7 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 		if(logger.isDebugEnabled())
 			logger.debug("Successfully shut down " + JMSConsumerHandler.class.getName());
 	}
+
 
 	/**
 	 * Extracts a single value for the parameter referenced
@@ -298,20 +296,34 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 		return vendorSpecificSettings;
 	}
 
-	
+		
+
+	/**
+	 * @return the id
+	 */
 	public String getId() {
 		return id;
 	}
 
+	/**
+	 * @param id the id to set
+	 */
 	public void setId(String id) {
 		this.id = id;
 	}
 
+	/**
+	 * @return the type
+	 */
 	public String getType() {
 		return type;
 	}
 
+	/**
+	 * @param type the type to set
+	 */
 	public void setType(String type) {
 		this.type = type;
 	}
+
 }

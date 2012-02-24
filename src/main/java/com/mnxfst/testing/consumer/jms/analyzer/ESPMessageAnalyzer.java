@@ -24,27 +24,22 @@ import java.util.Map;
 import javax.jms.JMSException;
 import javax.jms.Message;
 import javax.jms.TextMessage;
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
-import javax.xml.parsers.ParserConfigurationException;
-import javax.xml.xpath.XPath;
-import javax.xml.xpath.XPathExpression;
-import javax.xml.xpath.XPathExpressionException;
-import javax.xml.xpath.XPathFactory;
 
 import org.apache.log4j.Logger;
 
 import com.ibm.icu.text.SimpleDateFormat;
 import com.ibm.icu.util.TimeZone;
+import com.lmax.disruptor.EventHandler;
 import com.mnxfst.testing.consumer.exception.AsyncInputConsumerException;
 import com.mnxfst.testing.consumer.jms.IMessageAnalyzer;
+import com.mnxfst.testing.consumer.jms.event.JMSMessageEvent;
 
 /**
  * esp project specifc log analyzer
  * @author mnxfst
  * @since 22.02.2012
  */
-public class ESPMessageAnalyzer implements IMessageAnalyzer {
+public class ESPMessageAnalyzer implements IMessageAnalyzer, EventHandler<JMSMessageEvent> {
 
 	private static final Logger logger = Logger.getLogger(ESPMessageAnalyzer.class.getName());			
 
@@ -58,11 +53,11 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer {
 	private String measuringPointId = null;
 	private String requiredDomainSign = null;
 	
-	private XPathExpression requestIdExpression = null;
-	private XPathExpression domainSignExpression = null;
-	private XPathExpression titleExpression = null;
-	private XPathExpression materialGroupExpression = null;
-	private DocumentBuilder documentBuilder = null;
+//	private XPathExpression requestIdExpression = null;
+//	private XPathExpression domainSignExpression = null;
+//	private XPathExpression titleExpression = null;
+//	private XPathExpression materialGroupExpression = null;
+//	private DocumentBuilder documentBuilder = null;
 	
 	
 	private boolean running = false;
@@ -86,7 +81,7 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer {
 		// switch to utc
 		dateFormatter.setTimeZone(TimeZone.getTimeZone("UTC"));
 		
-		// compile xpath expressions
+/*		// compile xpath expressions
 		XPath xpath = XPathFactory.newInstance().newXPath();		
 		try {
 			this.requestIdExpression = xpath.compile("//Id//text()");
@@ -99,6 +94,7 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer {
 		} catch (ParserConfigurationException e) {
 			throw new AsyncInputConsumerException("Failed to set up document builder required for JMS message content analysis");
 		}
+	*/
 	}
 	
 	/**
@@ -111,6 +107,46 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer {
 		return (values != null && !values.isEmpty()) ? values.get(0) : null;		
 	}
 
+
+	/**
+	 * @see com.lmax.disruptor.EventHandler#onEvent(java.lang.Object, long, boolean)
+	 */
+	public void onEvent(JMSMessageEvent event, long sequence, boolean endOfBatch) throws Exception {
+
+		if(event != null && event.getMessageText() != null) {						
+
+			long incomingTime = event.getTimestamp();
+			String msg = event.getMessageText();
+			
+			int reqIdStartIdx = msg.indexOf("<pub:Id>");
+			int reqIdEndIdx = msg.indexOf("</pub:Id>");					
+			String requestId = msg.substring(reqIdStartIdx, reqIdEndIdx);
+			
+			int domainIdStartIdx = msg.indexOf("<pub:domainSign>");
+			int domainidEndIdx = msg.indexOf("</pub:domainSign>");
+			String domainSign = msg.substring(domainIdStartIdx, domainidEndIdx);
+			
+			int titleIdxStart = msg.indexOf("<pub:title>");
+			int titleIdxEnd = msg.indexOf("</pub:title>");
+			String title = msg.substring(titleIdxStart, titleIdxEnd);
+			
+			int matIdxStart = msg.indexOf("<pub:materialGroup>");
+			int matIdxEnd = msg.indexOf("</pub:materialGroup>");
+			String materialGroup = msg.substring(matIdxStart, matIdxEnd);
+		
+			boolean validMessage = (requestId != null && !requestId.isEmpty()); 
+			if(validMessage)
+				validMessage = (domainSign != null && domainSign.equalsIgnoreCase(requiredDomainSign));
+			if(validMessage)
+				validMessage = (title != null && !title.isEmpty());
+			if(validMessage)
+				validMessage = (materialGroup != null && !materialGroup.isEmpty());
+			
+			StringBuffer logBuffer = new StringBuffer();
+			logBuffer.append(requestId).append(";").append(nodeId).append(";").append(measuringPointId).append(";").append(incomingTime).append(";").append(dateFormatter.format(incomingTime)).append(";").append("true;").append(validMessage); // TODO validate request
+			logger.info(logBuffer.toString());
+		}
+	}
 
 	public void onMessage(Message message) {
 		if(message != null) {
@@ -204,14 +240,22 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer {
 	}
 
 	public static void main(String[] args) {
-		long s = 1330079725078L;
-		long e = 1330079725734L;
-		System.out.println("2000 / " + (e-s) + ": " + (2000/ (e-s)));
+		long s = 1330097760527L;
+		long e = 1330097761038L;
+		System.out.println("4000 / " + (e-s) + ": " + (4000/ (e-s)));
 		
-		s = 1330081889940L;
-		e = 1330082036279L;
+		s = 1330103192754L;
+		e = 1330103584047L;
+		System.out.println("128000 / " + (e-s) + ": " + (128000/ (e-s)));
 		
-		System.out.println("113677 / " + (e-s) + ": " + (double)(113677/ (e-s)));
+		s = 1330103732985L;
+		e = 1330103733470L;
+		System.out.println("6000 / " + (e-s) + ": " + (6000/ (e-s)));
+		
+		s = 1330104230754L;
+		e = 1330104250260L;
+		System.out.println("6000 / " + (e-s) + ": " + (6000/ (e-s)));
+
 	}
 	
 }

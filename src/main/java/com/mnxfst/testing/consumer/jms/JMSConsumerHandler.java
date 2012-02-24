@@ -87,7 +87,6 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 	private static ConcurrentMap<String, IMessageAnalyzer> runningAnalyzers = new ConcurrentHashMap<String, IMessageAnalyzer>();
 
 	private Set<String> activatedAnalyzers = new HashSet<String>(); // TODO maybe we could get the other ones to sleep
-	
 
 	public AsyncInputConsumerStatistics getConsumerStatistics() {
 		return new AsyncInputConsumerStatistics();
@@ -166,6 +165,9 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 			jndiEnvironment.put(Context.SECURITY_PRINCIPAL, securityPrincipal);
 		
 		jndiEnvironment.putAll(extractVendorSpecificValues(properties));
+		
+		if(logger.isDebugEnabled())
+			logger.debug("jmsConsumer[id="+id+", type="+type+", initialCtxFactory="+initialContextFactoryClass+", connectionFactory="+connectionFactoryName+", providerUrl="+providerUrl+", jmsDestination="+jmsDestination+"]");
 
 		try {
 			// create initial context from collected settings
@@ -188,16 +190,18 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 			
 			// start listening
 			connection.start();
-			
+
+			if(logger.isDebugEnabled())
+				logger.debug("jmsConsumer[id="+this.id+", type="+this.type+", providerUrl="+providerUrl+", jmsDestination="+destination+", initialCtxFactory="+initialContextFactoryClass+", connectionFactoryName="+connectionFactoryName+", clientId="+connection.getClientID()+", analyzers="+runningAnalyzers.size()+"]");
+
 		} catch(NamingException e) {
+			logger.error("Failed to initialize naming context, lookup required objects and establish a connection. Error: " + e.getMessage(), e);
 			throw new AsyncInputConsumerException("Failed to initialize naming context, lookup required objects and establish a connection. Error: " + e.getMessage());
 		} catch (JMSException e) {
+			logger.error("Failed to initialize naming context, lookup required objects and establish a connection. Error: " + e.getMessage(), e);
 			throw new AsyncInputConsumerException("Failed to initialize naming context, lookup required objects and establish a connection. Error: " + e.getMessage());
 		}
-
 		
-		
-		logger.info("jmsConsumer[id="+this.id+", type="+this.type+", providerUrl="+providerUrl+", jmsDestination="+destination+", initialCtxFactory="+initialContextFactoryClass+", connectionFactoryName="+connectionFactoryName+", analyzers="+runningAnalyzers.size()+"]");
 		
 	}
 
@@ -213,18 +217,10 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 			IMessageAnalyzer analyzer = runningAnalyzers.get(aa);
 			analyzer.onMessage(msg);
 		}
-		
-		if(messagesReceived % 100 == 0) {
-			logger.info("Received " + messagesReceived+ " messages");
-			System.out.println("Received " + messagesReceived+ " messages");
-		}
 			
 	}
 	
 	public void run() {
-		running = true;
-		while(running);
-		logger.info(JMSConsumerHandler.class.getName() + " shutdown");
 	}
 
 	/**
@@ -284,12 +280,17 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 	protected Map<String, String> extractVendorSpecificValues(Map<String, List<String>> queryParams) {
 		
 		Map<String, String> vendorSpecificSettings = new HashMap<String, String>();
+		if(logger.isDebugEnabled())
+			logger.debug("Vendor specific JMS settings");
 		
 		for(String parameter : queryParams.keySet()) {
 			if(parameter.startsWith(REQUEST_PARAMETER_VENDOR_SPECIFC_PREFIX)) {
 				String value = extractSingleString(parameter, queryParams);
 				if(value != null) {
 					vendorSpecificSettings.put(parameter.substring(REQUEST_PARAMETER_VENDOR_SPECIFC_PREFIX.length()), value);
+					if(logger.isDebugEnabled())
+						logger.debug(parameter.substring(REQUEST_PARAMETER_VENDOR_SPECIFC_PREFIX.length()) + " = " + value);
+
 				}
 			}
 		}

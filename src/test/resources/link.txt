@@ -1,0 +1,1 @@
+http://localhost:8080/consumer/?start=jms&requiredDomainSign=1&initialCtxFactory=org.apache.activemq.jndi.ActiveMQInitialContextFactory&connectionFactoryName=ConnectionFactory&providerUrl=tcp://localhost:61616&destination=espTopic&vendor-topic.espTopic=espTopic&jmsMsgAnalyzers=esp

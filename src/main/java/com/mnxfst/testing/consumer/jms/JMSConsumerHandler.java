@@ -19,6 +19,7 @@
 
 package com.mnxfst.testing.consumer.jms;
 
+import java.io.Serializable;
 import java.net.InetAddress;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -26,8 +27,6 @@ import java.util.Hashtable;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -40,6 +39,7 @@ import javax.jms.MessageConsumer;
 import javax.jms.MessageListener;
 import javax.jms.Session;
 import javax.jms.TextMessage;
+import javax.jms.TopicSubscriber;
 import javax.naming.Context;
 import javax.naming.InitialContext;
 import javax.naming.NamingException;
@@ -51,7 +51,6 @@ import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.SequenceBarrier;
 import com.lmax.disruptor.SingleThreadedClaimStrategy;
 import com.lmax.disruptor.SleepingWaitStrategy;
-import com.lmax.disruptor.dsl.Disruptor;
 import com.mnxfst.testing.consumer.async.AsyncInputConsumerStatistics;
 import com.mnxfst.testing.consumer.async.IAsyncInputConsumer;
 import com.mnxfst.testing.consumer.exception.AsyncInputConsumerException;
@@ -67,17 +66,23 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 
 	private static final Logger logger = Logger.getLogger(JMSConsumerHandler.class.getName());
 	
+	private enum JMSDestinationType implements Serializable {
+		TOPIC, QUEUE;
+	}
+	
 	private static final String REQUEST_PARAMETER_INITIAL_CONTEXT_FACTORY = "initialCtxFactory";
 	private static final String REQUEST_PARAMETER_CONNECTION_FACTORY_NAME = "connectionFactoryName";
 	private static final String REQUEST_PARAMETER_JMS_DESTINATION = "destination";
 	private static final String REQUEST_PARAMETER_PROVIDER_URL = "providerUrl";
 	private static final String REQUEST_PARAMETER_SECURITY_PRINCIPAL = "secPrincipal";
 	private static final String REQUEST_PARAMETER_SECURITY_CREDENTIALS = "secCredentials";
+	private static final String REQUEST_PARAMETER_JMS_DESTINATION_TYPE = "type";
+	private static final String REQUEST_PARAMETER_JMS_MESSAGE_SELECTOR = "messageSelector";
 	
 	private static final String REQUEST_PARAMETER_VENDOR_SPECIFC_PREFIX = "vendor-";
 	private static final String REQUEST_PARAMETER_JMS_MESSAGE_ANALYZERS = "jmsMsgAnalyzers";
 	
-	private static final String CONFIG_PROPS_JMS_MESSAGE_ANALYZERS_PREFIX = "consumer.async.jms.message-analyzer.";
+	private static final String CONFIG_PROPS_JMS_MESSAGE_ANALYZERS_PREFIX = "consumer.async.jms.message-analyzer.";	
 	
 	private String id = null;
 	private String type = null;
@@ -86,7 +91,8 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 	private Connection connection = null;
 	private Session session = null;
 	private Destination destination = null;
-	private MessageConsumer messageConsumer = null;
+	private JMSDestinationType jmsDestinationType = JMSDestinationType.QUEUE;
+	private String messageSelector = null;
 	
 	private int messagesReceived = 0;
 	private boolean running = false; 
@@ -126,8 +132,18 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 		if(jmsDestination == null || jmsDestination.isEmpty())
 			throw new AsyncInputConsumerException("Missing required JMS destination lookup name");
 		
+		String tmp = extractSingleString(REQUEST_PARAMETER_JMS_DESTINATION_TYPE, properties);
+		if(tmp != null && tmp.trim().equalsIgnoreCase("topic"))
+			jmsDestinationType = JMSDestinationType.TOPIC;
+		else
+			jmsDestinationType = JMSDestinationType.QUEUE;
+		
+		messageSelector = extractSingleString(REQUEST_PARAMETER_JMS_MESSAGE_SELECTOR, properties);
+		
 		String securityPrincipal = extractSingleString(REQUEST_PARAMETER_SECURITY_PRINCIPAL, properties);
 		String securityCredentials = extractSingleString(REQUEST_PARAMETER_SECURITY_CREDENTIALS, properties);
+		
+		
 
 		jndiEnvironment.put(Context.INITIAL_CONTEXT_FACTORY, initialContextFactoryClass);
 		jndiEnvironment.put(Context.PROVIDER_URL, providerUrl);
@@ -137,9 +153,11 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 			jndiEnvironment.put(Context.SECURITY_PRINCIPAL, securityPrincipal);
 		
 		jndiEnvironment.putAll(extractVendorSpecificValues(properties));
+
+		logger.info("JMSType: " + jmsDestinationType + ", selector = " + messageSelector);
 		
 		if(logger.isDebugEnabled())
-			logger.debug("jmsConsumer[id="+id+", type="+type+", initialCtxFactory="+initialContextFactoryClass+", connectionFactory="+connectionFactoryName+", providerUrl="+providerUrl+", jmsDestination="+jmsDestination+"]");
+			logger.debug("jmsConsumer[id="+id+", type="+type+", initialCtxFactory="+initialContextFactoryClass+", connectionFactory="+connectionFactoryName+", providerUrl="+providerUrl+", jmsDestination="+jmsDestination+", type="+jmsDestinationType+", selector=("+messageSelector+")]");
 
 		try {
 			// create initial context from collected settings
@@ -149,7 +167,7 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 			connectionFactory = (ConnectionFactory)ctx.lookup(connectionFactoryName);
 			connection = connectionFactory.createConnection();
 			try {
-				connection.setClientID(id + "@"+InetAddress.getLocalHost().getHostName());
+				connection.setClientID("jmsConsumer@"+InetAddress.getLocalHost().getHostName());
 			} catch(Exception e) {
 				logger.error("jmsConsumer[id="+this.id+", type="+this.type+"]: host name lookup failed. Client id will not be set for JMS connection. Error: " + e.getMessage());
 			}
@@ -157,8 +175,27 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 			
 			// find desired destination and create a message consumer
 			destination = (Destination)ctx.lookup(jmsDestination);
-			messageConsumer = session.createConsumer(destination);
-			messageConsumer.setMessageListener(this);
+			
+			switch(jmsDestinationType) {
+				case TOPIC: {
+					
+					TopicSubscriber topicMessageConsumer = null;
+					if(messageSelector != null && !messageSelector.isEmpty()) {
+						topicMessageConsumer = (TopicSubscriber)session.createConsumer(destination, messageSelector);
+						logger.info("topicMessageConsumer[destination="+jmsDestination+", messageSelector="+messageSelector+"]");
+					} else {
+						topicMessageConsumer = (TopicSubscriber)session.createConsumer(destination);
+						logger.info("topicMessageConsumer[destination="+jmsDestination+", messageSelector=not provided]");
+					}
+					topicMessageConsumer.setMessageListener(this);
+					break;
+				}
+				default: {
+					MessageConsumer messageConsumer = session.createConsumer(destination);
+					messageConsumer.setMessageListener(this);
+					logger.info("queueMessageConsumer[destination="+jmsDestination+"]");
+				}
+			}	
 			
 			
 			
@@ -179,13 +216,11 @@ public class JMSConsumerHandler implements IAsyncInputConsumer, MessageListener 
 		
 		jmsMessageEventRingBuffer = new RingBuffer<JMSMessageEvent>(JMSMessageEvent.EVENT_FACTORY, new SingleThreadedClaimStrategy(BUFFER_SIZE), new SleepingWaitStrategy());
 		SequenceBarrier barrier = jmsMessageEventRingBuffer.newBarrier();
-		BatchEventProcessor<JMSMessageEvent> eventProcessor = new BatchEventProcessor<JMSMessageEvent>(jmsMessageEventRingBuffer, barrier, new ESPMessageAnalyzer());
+		ESPMessageAnalyzer analyzer = new ESPMessageAnalyzer();
+		analyzer.initialize(properties);
+		BatchEventProcessor<JMSMessageEvent> eventProcessor = new BatchEventProcessor<JMSMessageEvent>(jmsMessageEventRingBuffer, barrier, analyzer);
 		jmsMessageEventRingBuffer.setGatingSequences(eventProcessor.getSequence());
 		EXECUTOR.submit(eventProcessor);
-		/*
-		RingBuffer<>disruptor = new Disruptor<JMSMessageEvent>(JMSMessageEvent.EVENT_FACTORY, EXECUTOR, new SingleThreadedClaimStrategy(BUFFER_SIZE), new SleepingWaitStrategy());
-		disruptor.handleEventsWith(new ESPMessageAnalyzer());
-		jmsMessageEventRingBuffer = disruptor.getRingBuffer();*/
 	}
 
 	public AsyncInputConsumerStatistics getConsumerStatistics() {

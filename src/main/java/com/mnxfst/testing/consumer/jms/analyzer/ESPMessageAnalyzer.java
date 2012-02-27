@@ -21,17 +21,12 @@ package com.mnxfst.testing.consumer.jms.analyzer;
 import java.util.List;
 import java.util.Map;
 
-import javax.jms.JMSException;
-import javax.jms.Message;
-import javax.jms.TextMessage;
-
 import org.apache.log4j.Logger;
 
 import com.ibm.icu.text.SimpleDateFormat;
 import com.ibm.icu.util.TimeZone;
 import com.lmax.disruptor.EventHandler;
 import com.mnxfst.testing.consumer.exception.AsyncInputConsumerException;
-import com.mnxfst.testing.consumer.jms.IMessageAnalyzer;
 import com.mnxfst.testing.consumer.jms.event.JMSMessageEvent;
 
 /**
@@ -39,26 +34,35 @@ import com.mnxfst.testing.consumer.jms.event.JMSMessageEvent;
  * @author mnxfst
  * @since 22.02.2012
  */
-public class ESPMessageAnalyzer implements IMessageAnalyzer, EventHandler<JMSMessageEvent> {
+public class ESPMessageAnalyzer implements EventHandler<JMSMessageEvent> {
 
 	private static final Logger logger = Logger.getLogger(ESPMessageAnalyzer.class.getName());			
 
 	private static final String CFG_PROP_NODE_ID = "nodeId";
 	private static final String CFG_PROP_MEASURING_POINT_ID = "measuringPointId";
 	private static final String CFG_PROP_REQUIRED_DOMAIN_SIGN = "requiredDomainSign";
+
+	private static final String REQ_ID_START_TAG = "<pub:Id>";
+	private static final int REQ_ID_START_TAG_LENGTH = 8;
+	private static final String REQ_ID_END_TAG = "</pub:Id>";
 	
+	private static final String DOM_SIGN_START_TAG = "<pub:domainSign>";
+	private static final int DOM_SIGN_START_TAG_LENGTH = 16;
+	private static final String DOM_SIGN_END_TAG = "</pub:domainSign>";
+	
+	private static final String TITLE_START_TAG = "<pub:title>";
+	private static final int TITLE_START_TAG_LENGTH = 11;
+	private static final String TITLE_END_TAG = "</pub:title>";
+
+	private static final String MAT_GROUP_START_TAG = "<pub:materialGroup>";
+	private static final int MAT_GROUP_START_TAG_LENGTH = 19;
+	private static final String MAT_GROUP_END_TAG = "</pub:materialGroup>";
+
 	private static final SimpleDateFormat dateFormatter = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
 	
 	private String nodeId = null;
 	private String measuringPointId = null;
 	private String requiredDomainSign = null;
-	
-//	private XPathExpression requestIdExpression = null;
-//	private XPathExpression domainSignExpression = null;
-//	private XPathExpression titleExpression = null;
-//	private XPathExpression materialGroupExpression = null;
-//	private DocumentBuilder documentBuilder = null;
-	
 	
 	private boolean running = false;
 	
@@ -76,25 +80,12 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer, EventHandler<JMSMes
 		this.requiredDomainSign = extractSingleString(CFG_PROP_REQUIRED_DOMAIN_SIGN, configuration);
 		if(this.requiredDomainSign == null || this.requiredDomainSign.isEmpty())
 			throw new AsyncInputConsumerException("Missing required configuration option 'requiredDomainSign'");
+		else
+			this.requiredDomainSign = this.requiredDomainSign.trim();
 		
 		
 		// switch to utc
 		dateFormatter.setTimeZone(TimeZone.getTimeZone("UTC"));
-		
-/*		// compile xpath expressions
-		XPath xpath = XPathFactory.newInstance().newXPath();		
-		try {
-			this.requestIdExpression = xpath.compile("//Id//text()");
-			this.domainSignExpression = xpath.compile("//domainSign/text()");
-			this.titleExpression = xpath.compile("//title/text()");
-			this.materialGroupExpression = xpath.compile("//materialGroup/text()");
-			this.documentBuilder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
-		} catch (XPathExpressionException e) {
-			throw new AsyncInputConsumerException("Failed to compute xpath expressions required for JMS message content analysis");
-		} catch (ParserConfigurationException e) {
-			throw new AsyncInputConsumerException("Failed to set up document builder required for JMS message content analysis");
-		}
-	*/
 	}
 	
 	/**
@@ -107,7 +98,6 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer, EventHandler<JMSMes
 		return (values != null && !values.isEmpty()) ? values.get(0) : null;		
 	}
 
-
 	/**
 	 * @see com.lmax.disruptor.EventHandler#onEvent(java.lang.Object, long, boolean)
 	 */
@@ -118,25 +108,26 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer, EventHandler<JMSMes
 			long incomingTime = event.getTimestamp();
 			String msg = event.getMessageText();
 			
-			int reqIdStartIdx = msg.indexOf("<pub:Id>");
-			int reqIdEndIdx = msg.indexOf("</pub:Id>");					
-			String requestId = msg.substring(reqIdStartIdx, reqIdEndIdx);
+			int reqIdStartIdx = msg.indexOf(REQ_ID_START_TAG);
+			int reqIdEndIdx = msg.indexOf(REQ_ID_END_TAG);					
+			String requestId = msg.substring(reqIdStartIdx + REQ_ID_START_TAG_LENGTH, reqIdEndIdx);
 			
-			int domainIdStartIdx = msg.indexOf("<pub:domainSign>");
-			int domainidEndIdx = msg.indexOf("</pub:domainSign>");
-			String domainSign = msg.substring(domainIdStartIdx, domainidEndIdx);
+			int domainIdStartIdx = msg.indexOf(DOM_SIGN_START_TAG);
+			int domainidEndIdx = msg.indexOf(DOM_SIGN_END_TAG);
+			String domainSign = msg.substring(domainIdStartIdx + DOM_SIGN_START_TAG_LENGTH, domainidEndIdx);
 			
-			int titleIdxStart = msg.indexOf("<pub:title>");
-			int titleIdxEnd = msg.indexOf("</pub:title>");
-			String title = msg.substring(titleIdxStart, titleIdxEnd);
+			int titleIdxStart = msg.indexOf(TITLE_START_TAG);
+			int titleIdxEnd = msg.indexOf(TITLE_END_TAG);
+			String title = msg.substring(titleIdxStart + TITLE_START_TAG_LENGTH, titleIdxEnd);
 			
-			int matIdxStart = msg.indexOf("<pub:materialGroup>");
-			int matIdxEnd = msg.indexOf("</pub:materialGroup>");
-			String materialGroup = msg.substring(matIdxStart, matIdxEnd);
+			int matIdxStart = msg.indexOf(MAT_GROUP_START_TAG);
+			int matIdxEnd = msg.indexOf(MAT_GROUP_END_TAG);
+			String materialGroup = msg.substring(matIdxStart + MAT_GROUP_START_TAG_LENGTH, matIdxEnd);
 		
-			boolean validMessage = (requestId != null && !requestId.isEmpty()); 
+			boolean validMessage = (requestId != null && !requestId.isEmpty());
+			
 			if(validMessage)
-				validMessage = (domainSign != null && domainSign.equalsIgnoreCase(requiredDomainSign));
+				validMessage = (domainSign != null && domainSign.trim().equalsIgnoreCase(requiredDomainSign));
 			if(validMessage)
 				validMessage = (title != null && !title.isEmpty());
 			if(validMessage)
@@ -145,85 +136,6 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer, EventHandler<JMSMes
 			StringBuffer logBuffer = new StringBuffer();
 			logBuffer.append(requestId).append(";").append(nodeId).append(";").append(measuringPointId).append(";").append(incomingTime).append(";").append(dateFormatter.format(incomingTime)).append(";").append("true;").append(validMessage); // TODO validate request
 			logger.info(logBuffer.toString());
-		}
-	}
-
-	public void onMessage(Message message) {
-		if(message != null) {
-			if(message instanceof TextMessage) {
-				try {
-
-					long incomingTime = System.currentTimeMillis();
-					String msg = ((TextMessage)message).getText();
-
-					if(msg != null && !msg.isEmpty()) {						
-						
-						int reqIdStartIdx = msg.indexOf("<pub:Id>");
-						int reqIdEndIdx = msg.indexOf("</pub:Id>");					
-						String requestId = msg.substring(reqIdStartIdx, reqIdEndIdx);
-						
-						int domainIdStartIdx = msg.indexOf("<pub:domainSign>");
-						int domainidEndIdx = msg.indexOf("</pub:domainSign>");
-						String domainSign = msg.substring(domainIdStartIdx, domainidEndIdx);
-						
-						int titleIdxStart = msg.indexOf("<pub:title>");
-						int titleIdxEnd = msg.indexOf("</pub:title>");
-						String title = msg.substring(titleIdxStart, titleIdxEnd);
-						
-						int matIdxStart = msg.indexOf("<pub:materialGroup>");
-						int matIdxEnd = msg.indexOf("</pub:materialGroup>");
-						String materialGroup = msg.substring(matIdxStart, matIdxEnd);
-					
-/*					
-						Document document = this.documentBuilder.parse(new ByteArrayInputStream(msg.getBytes()));
-						String requestId = null;
-						try {
-							requestId = (String)requestIdExpression.evaluate(document, XPathConstants.STRING);
-						} catch (XPathExpressionException e) {
-							requestId = "-1_requestParameter_is_missing";
-						}
-
-						String domainSign = null;
-						try {
-							domainSign = (String)domainSignExpression.evaluate(document, XPathConstants.STRING);
-						} catch (XPathExpressionException e) {
-							//
-						}
-						
-						String title = null;
-						try {
-							title = (String)titleExpression.evaluate(document, XPathConstants.STRING);
-						} catch(XPathExpressionException e) {
-							//
-						}
-						
-						String materialGroup = null;
-						try {
-							materialGroup = (String)materialGroupExpression.evaluate(document, XPathConstants.STRING);
-						} catch(XPathExpressionException e) {
-							//
-						}*/
-						
-						boolean validMessage = (requestId != null && !requestId.isEmpty()); 
-						if(validMessage)
-							validMessage = (domainSign != null && domainSign.equalsIgnoreCase(requiredDomainSign));
-						if(validMessage)
-							validMessage = (title != null && !title.isEmpty());
-						if(validMessage)
-							validMessage = (materialGroup != null && !materialGroup.isEmpty());
-						
-						StringBuffer logBuffer = new StringBuffer();
-						logBuffer.append(requestId).append(";").append(nodeId).append(";").append(measuringPointId).append(";").append(incomingTime).append(";").append(dateFormatter.format(incomingTime)).append(";").append("true;").append(validMessage); // TODO validate request
-						logger.info(logBuffer.toString());
-					}
-				} catch (JMSException e) {
-					logger.error("Failed to convert incoming message to text message representation. Error: " + e.getMessage());
-//				} catch (SAXException e) {
-//					logger.error("Failed to parse incoming message into XML DOM representation. Error: " + e.getMessage());
-//				} catch (IOException e) {
-//					logger.error("Failed to execute a necessary I/O operation. Error: " + e.getMessage());
-				}
-			} 
 		}
 	}
 
@@ -239,6 +151,8 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer, EventHandler<JMSMes
 		running = false;
 	}
 
+	static String msg = "<pub:PublishProductRequest xmlns:pub=\"http://b2c.otto.de/schema/publishProduct\"><pub:sourceParameter><pub:Id>${global.scenarioId}-${global.productId}-${global.runId}-${global.threads}-${global.waitTime}-${run.requestId}</pub:Id><pub:orderingSystem>Internet</pub:orderingSystem><pub:domainSign>${run.domainSign}</pub:domainSign></pub:sourceParameter><pub:path>//localhost</pub:path><pub:keywords><pub:keyword>Hose</pub:keyword><pub:keyword>lang</pub:keyword></pub:keywords><pub:title>die lange Hose${run.randomInt}</pub:title><pub:descriptionShort>elegante Hose</pub:descriptionShort><pub:descriptionLong>die elegante Hose</pub:descriptionLong><pub:brand>Levis</pub:brand><pub:materialGroup>stoff</pub:materialGroup><pub:categoryList><pub:category>Kleidung</pub:category><pub:category>Mann</pub:category></pub:categoryList><pub:characteristicList><pub:map><pub:value>hose</pub:value><pub:value>fällt klein aus${run.randomInt}</pub:value></pub:map></pub:characteristicList><pub:mediaList><pub:media><pub:media>Video</pub:media></pub:media></pub:mediaList><pub:constraints><pub:map><pub:value>Lieferservice gleich ${run.randomInt} Wochen</pub:value></pub:map></pub:constraints><pub:aktionen><pub:map><pub:value>bekannt aus tv</pub:value></pub:map></pub:aktionen><pub:onlineFrom>2001-10-26T21:32:52</pub:onlineFrom><pub:onlineTo>2010-10-26T21:32:52</pub:onlineTo></pub:PublishProductRequest>";
+	
 	public static void main(String[] args) {
 		long s = 1330097760527L;
 		long e = 1330097761038L;
@@ -256,6 +170,55 @@ public class ESPMessageAnalyzer implements IMessageAnalyzer, EventHandler<JMSMes
 		e = 1330104250260L;
 		System.out.println("6000 / " + (e-s) + ": " + (6000/ (e-s)));
 
+		s = 1330116558133L;
+		e = 1330116734692L;
+		System.out.println("server: 64000 / " + (e-s) + ": " + (64000/ (e-s)));
+		
+		s = 1330121587250L;
+		e = 1330121599968L;
+		System.out.println("mock: 64000 / " + (e-s) + ": " + (64000/ (e-s)));
+		
+		s = 1330122126921L;
+		e = 1330122126968L;
+		System.out.println((e-s));
+		
+		s = 1330122126984L;
+		e = 1330122126984L;
+		System.out.println((e-s));
+		
+		s = 1330334633382L;
+		e = 1330335026324L;
+		System.out.println((e-s) + "ms");
+		
+		s = 1330341530333L;
+		e = 1330341533559L;
+		System.out.println((e-s) + "ms");
+
+		s = 1330341960768L;
+		e = 1330342149822L;
+		System.out.println((e-s) + "ms");
+
+		int reqIdStartIdx = msg.indexOf(REQ_ID_START_TAG);
+		int reqIdEndIdx = msg.indexOf(REQ_ID_END_TAG);					
+		String requestId = msg.substring(reqIdStartIdx + REQ_ID_START_TAG_LENGTH, reqIdEndIdx);
+		
+		int domainIdStartIdx = msg.indexOf(DOM_SIGN_START_TAG);
+		int domainidEndIdx = msg.indexOf(DOM_SIGN_END_TAG);
+		String domainSign = msg.substring(domainIdStartIdx + DOM_SIGN_START_TAG_LENGTH, domainidEndIdx);
+		
+		int titleIdxStart = msg.indexOf(TITLE_START_TAG);
+		int titleIdxEnd = msg.indexOf(TITLE_END_TAG);
+		String title = msg.substring(titleIdxStart + TITLE_START_TAG_LENGTH, titleIdxEnd);
+		
+		int matIdxStart = msg.indexOf(MAT_GROUP_START_TAG);
+		int matIdxEnd = msg.indexOf(MAT_GROUP_END_TAG);
+		String materialGroup = msg.substring(matIdxStart + MAT_GROUP_START_TAG_LENGTH, matIdxEnd);
+		
+		
+		System.out.println(requestId);
+		System.out.println(domainSign);
+		System.out.println(title);
+		System.out.println(materialGroup);
 	}
 	
 }
